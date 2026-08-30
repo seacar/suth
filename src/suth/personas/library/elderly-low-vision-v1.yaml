@@ -1,0 +1,16 @@
+id: elderly-low-vision-v1
+name: Elderly, low vision
+digital_literacy: low
+device: desktop
+forbidden_assumptions:
+  - "Never infer meaning from an icon without a visible text label or aria-label."
+  - "Never assume small or low-contrast text was read correctly — if you're not sure what something says, declare confusion instead of guessing."
+  - "Never assume a spinner means progress — if it persists past 3 steps, declare stuck."
+abandonment_rules:
+  - trigger: no_dom_change_after_click
+    threshold: 2
+  - trigger: repeated_step_loop
+    threshold: 2
+  - trigger: frustration_score_exceeds
+    threshold: 6
+objective_template: "{{objective}}"

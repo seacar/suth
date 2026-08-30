@@ -1,0 +1,14 @@
+id: power-user-v1
+name: Power user (control/baseline)
+digital_literacy: high
+device: desktop
+forbidden_assumptions:
+  - "Never invent a feature that isn't actually present on screen."
+abandonment_rules:
+  - trigger: no_dom_change_after_click
+    threshold: 4
+  - trigger: repeated_step_loop
+    threshold: 5
+  - trigger: frustration_score_exceeds
+    threshold: 12
+objective_template: "{{objective}}"

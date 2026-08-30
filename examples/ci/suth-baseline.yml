@@ -1,0 +1,70 @@
+# Example: record a SUTH baseline session whenever main deploys, so PRs have
+# something to compare against. Copy into your TARGET project's
+# .github/workflows/ (not suth's own) and adapt the checkout/deploy-wait steps
+# — this assumes your own deploy workflow already produced a reachable URL for
+# the `main` branch (e.g. a stable staging URL) by the time this runs.
+name: SUTH baseline
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  record-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install suth
+        run: |
+          git clone --depth 1 https://github.com/seacar/suth.git suth-harness
+          cd suth-harness
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv venv .venv --python 3.11
+          uv pip install -e ".[dev]" --python .venv/bin/python
+          .venv/bin/playwright install --with-deps chromium
+
+      - name: Install specific CLI
+        run: curl -fsSL https://specific.dev/install.sh | sh
+        env:
+          SPECIFIC_API_KEY: ${{ secrets.SPECIFIC_API_KEY }}
+
+      - name: Start local infra, apply migrations, sync personas
+        working-directory: suth-harness
+        run: |
+          specific dev &
+          sleep 10
+          specific exec cli -- .venv/bin/python scripts/migrate.py
+          specific exec cli -- .venv/bin/python scripts/sync_personas.py
+        env:
+          SPECIFIC_API_KEY: ${{ secrets.SPECIFIC_API_KEY }}
+
+      - name: Run harness against main's stable URL
+        id: audit
+        working-directory: suth-harness
+        run: |
+          specific exec cli -- .venv/bin/python run_test.py \
+            --config ${{ github.workspace }}/suth_config.json \
+            --objective "${{ vars.SUTH_OBJECTIVE }}" \
+            --environment ci \
+            --caller github-actions-baseline \
+            --headless \
+            --export-transcript baseline-transcript.json \
+          | tee run.log
+          echo "session_id=$(grep -oP 'session_id:\s+\K.*' run.log)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish baseline session id as a repo variable
+        run: gh variable set SUTH_BASELINE_SESSION_ID --body "${{ steps.audit.outputs.session_id }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: suth-baseline-transcript
+          path: |
+            suth-harness/baseline-transcript.json
+            suth-harness/screenshots/

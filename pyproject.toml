@@ -1,0 +1,36 @@
+[project]
+name = "suth"
+version = "0.1.0"
+description = "Synthetic User Test Harness — an automated UX critic that drives a real browser with an LLM-backed persona"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.47",
+    "pydantic>=2.8",
+    "pyyaml>=6.0",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "httpx>=0.27",
+    "boto3>=1.35",
+    "mcp>=1.2",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/suth"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

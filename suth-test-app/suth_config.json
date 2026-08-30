@@ -1,0 +1,36 @@
+{
+  "project_id": "suth-test-app",
+  "base_url": "http://localhost:8765",
+  "default_personas": ["impatient-mobile-shopper-v2"],
+  "environments": {
+    "dev": {
+      "headed": true,
+      "model": "cheap-tier",
+      "max_steps": 20
+    },
+    "ci": {
+      "headless": true,
+      "model": "pinned-tier",
+      "max_steps": 25,
+      "token_cap": 50000
+    },
+    "agent": {
+      "headless": true,
+      "model": "pinned-tier",
+      "max_steps": 25,
+      "token_cap": 20000
+    }
+  },
+  "llm_providers": {
+    "cheap-tier": {
+      "provider": "ollama",
+      "model": "llama3.2:3b",
+      "base_url": "http://localhost:11434"
+    },
+    "pinned-tier": {
+      "provider": "ollama",
+      "model": "llama3.2:3b",
+      "base_url": "http://localhost:11434"
+    }
+  }
+}

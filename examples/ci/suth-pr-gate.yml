@@ -1,0 +1,71 @@
+# Example: gate a PR on a SUTH friction-score regression against the stored
+# `main` baseline (see suth-baseline.yml). Copy into your TARGET project's
+# .github/workflows/ and adapt the preview-URL step to however your platform
+# exposes a per-PR preview deploy.
+name: SUTH UX regression gate
+
+on:
+  pull_request:
+
+jobs:
+  suth-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install suth
+        run: |
+          git clone --depth 1 https://github.com/seacar/suth.git suth-harness
+          cd suth-harness
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv venv .venv --python 3.11
+          uv pip install -e ".[dev]" --python .venv/bin/python
+          .venv/bin/playwright install --with-deps chromium
+
+      - name: Install specific CLI
+        run: curl -fsSL https://specific.dev/install.sh | sh
+        env:
+          SPECIFIC_API_KEY: ${{ secrets.SPECIFIC_API_KEY }}
+
+      - name: Start local infra, apply migrations, sync personas
+        working-directory: suth-harness
+        run: |
+          specific dev &
+          sleep 10
+          specific exec cli -- .venv/bin/python scripts/migrate.py
+          specific exec cli -- .venv/bin/python scripts/sync_personas.py
+        env:
+          SPECIFIC_API_KEY: ${{ secrets.SPECIFIC_API_KEY }}
+
+      # Replace with however your platform surfaces a per-PR preview URL.
+      - name: Resolve this PR's preview URL
+        id: preview
+        run: echo "url=https://pr-${{ github.event.pull_request.number }}.preview.example.com" >> "$GITHUB_OUTPUT"
+
+      - name: Run harness against the preview deploy
+        working-directory: suth-harness
+        run: |
+          specific exec cli -- .venv/bin/python run_test.py \
+            --config ${{ github.workspace }}/suth_config.json \
+            --objective "${{ vars.SUTH_OBJECTIVE }}" \
+            --environment ci \
+            --caller github-actions \
+            --headless \
+            --export-transcript transcript.json \
+            --compare-baseline "${{ vars.SUTH_BASELINE_SESSION_ID }}" \
+            --regression-threshold "${{ vars.SUTH_REGRESSION_THRESHOLD || '5' }}"
+        # run_test.py exits non-zero when compare_runs flags a regression,
+        # which fails this step (and the PR check) automatically.
+
+      - name: Upload transcript + screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suth-transcript-pr-${{ github.event.pull_request.number }}
+          path: |
+            suth-harness/transcript.json
+            suth-harness/screenshots/

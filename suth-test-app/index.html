@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Acme Home Finder</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+  header button { font-size: 1.3rem; border: none; background: none; cursor: pointer; }
+  .listing { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid #ddd; }
+  .listing .price { font-weight: 600; }
+  .listing button { border: none; background: none; font-size: 1.2rem; cursor: pointer; color: #c33; }
+  #filter-panel { display: none; border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
+  #filter-panel.open { display: block; }
+  #filter-panel input { padding: 0.4rem; width: 8rem; }
+  #filter-panel button { margin-left: 0.5rem; padding: 0.4rem 0.9rem; }
+  #spinner { display: none; margin-top: 0.75rem; }
+  #spinner.spinning { display: inline-block; width: 1rem; height: 1rem; border: 2px solid #ccc; border-top-color: #333; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 style="font-size:1.2rem; margin:0;">Acme Home Finder</h1>
+  <!-- Deliberately bad control: icon-only toggle, no aria-label / text label. -->
+  <button id="filter-toggle">&#9776;</button>
+</header>
+
+<div id="filter-panel">
+  <label>Max price <input id="max-price" type="number" placeholder="50000"></label>
+  <!-- Deliberately bad control: this button never actually filters anything —
+       it just spins forever, simulating a silent/dead-click failure. -->
+  <button id="apply-filter">Apply</button>
+  <span id="spinner"></span>
+</div>
+
+<div id="listings">
+  <div class="listing">
+    <span>2BR Bungalow — Elm St <span class="price">$42,000</span></span>
+    <button class="save">&#9825;</button>
+  </div>
+  <div class="listing">
+    <span>3BR Colonial — Oak Ave <span class="price">$61,000</span></span>
+    <button class="save">&#9825;</button>
+  </div>
+  <div class="listing">
+    <span>Studio — River Rd <span class="price">$38,500</span></span>
+    <button class="save">&#9825;</button>
+  </div>
+  <div class="listing">
+    <span>2BR Ranch — Maple Dr <span class="price">$55,000</span></span>
+    <button class="save">&#9825;</button>
+  </div>
+  <div class="listing">
+    <span>1BR Condo — 5th St <span class="price">$47,900</span></span>
+    <button class="save">&#9825;</button>
+  </div>
+</div>
+
+<script>
+  const toggle = document.getElementById('filter-toggle');
+  const panel = document.getElementById('filter-panel');
+  const applyBtn = document.getElementById('apply-filter');
+  const spinner = document.getElementById('spinner');
+
+  toggle.addEventListener('click', () => panel.classList.toggle('open'));
+
+  // Deliberately broken: shows a spinner and never resolves, never filters.
+  applyBtn.addEventListener('click', () => {
+    spinner.classList.add('spinning');
+  });
+
+  document.querySelectorAll('.save').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      btn.style.color = '#333'; // only a color change, no visible confirmation/label
+    });
+  });
+</script>
+
+</body>
+</html>

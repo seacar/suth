@@ -1,6 +1,6 @@
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -117,7 +117,7 @@ class Driver:
         context = self._browser.new_context(**context_kwargs)
         self._context = context
         self.page = context.new_page()
-        self.video_started_at = datetime.now(timezone.utc)
+        self.video_started_at = datetime.now(UTC)
         self.page.goto(self.base_url)
 
     def stop(self) -> None:
@@ -161,8 +161,12 @@ class Driver:
             )
         return DomState(url=self.page.url, elements=elements)
 
-    def _resolve(self, ref: str):
+    def _resolve(self, ref: str | None):
         assert self.page is not None
+        if ref is None:
+            # session.py nulls a target that isn't in the snapshot; report it
+            # as a missing element rather than an AttributeError.
+            raise ValueError("action requires a target element ref, got none")
         index = int(ref.removeprefix("e"))
         return self.page.locator(INTERACTIVE_SELECTOR).nth(index)
 
@@ -182,21 +186,36 @@ class Driver:
                 f"action navigated off origin ({current} != {self.origin}); reverted"
             )
 
+    def _await_target(self, action: "Action") -> None:
+        """Wait for the action's target to be attached, with one bounded retry.
+
+        Resolution is checked separately from dispatch so the retry can never
+        re-fire an action that already happened (e.g. a click that landed but
+        then timed out waiting for navigation)."""
+        if action.target is None:
+            return
+        try:
+            self._resolve(action.target).wait_for(state="attached", timeout=3000)
+        except Exception:
+            time.sleep(0.5)
+            self._resolve(action.target).wait_for(state="attached", timeout=3000)
+
     def execute(self, action: "Action") -> ActionResult:
-        """Execute one action with a single bounded retry on locator resolution."""
+        """Execute one action; only locator resolution is retried, never dispatch."""
         assert self.page is not None
         before_html = self.page.content()
+
+        try:
+            self._await_target(action)
+        except Exception as e:
+            return ActionResult(ok=False, error=f"element_not_found: {e}")
 
         try:
             self._dispatch(action)
         except (OriginGuardrailError, InteractionModeError) as e:
             return ActionResult(ok=False, error=str(e))
-        except Exception:
-            time.sleep(0.5)
-            try:
-                self._dispatch(action)
-            except Exception as e:
-                return ActionResult(ok=False, error=f"element_not_found: {e}")
+        except Exception as e:
+            return ActionResult(ok=False, error=f"action_failed: {e}")
 
         after_html = self.page.content()
         shot = self.screenshot()

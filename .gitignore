@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
+.coverage
 screenshots/
 videos/
 .specific/
@@ -14,7 +16,10 @@ node_modules/
 .env
 .env.*
 .suth/
+graft/
 
 CLAUDE.md
 
+# Local project allowlist — copy mcp_projects.example.json to start.
+# Entries hold machine-specific paths.
 mcp_projects.json

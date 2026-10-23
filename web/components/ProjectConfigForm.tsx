@@ -113,7 +113,9 @@ export function ProjectConfigForm({
             onChange={(e) => setProviderChoice(e.target.value as LlmProviderId)}
           >
             {LLM_PROVIDER_OPTIONS.map((option) => (
-              <option key={option.id} value={option.id}>
+              // Unsupported providers stay visible (an existing config may
+              // use one) but can't be newly picked: the backend would 422.
+              <option key={option.id} value={option.id} disabled={!option.supported && option.id !== providerId}>
                 {option.label}
               </option>
             ))}

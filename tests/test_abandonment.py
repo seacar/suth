@@ -1,4 +1,3 @@
-import pytest
 
 from suth.abandonment import AbandonmentEvaluator
 from suth.brain.schema import Action, StepDecision

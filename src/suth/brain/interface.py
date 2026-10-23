@@ -34,7 +34,7 @@ def resolve_credential(ref: str) -> str:
 class Brain(Protocol):
     """Provider-agnostic interface the state machine talks to — plan §2/§5.5.
 
-    Concrete backends (Ollama now; Anthropic/OpenAI in Phase 6) are pure adapters
+    Concrete backends (Ollama, Anthropic; OpenAI later) are pure adapters
     behind this interface — adding one never touches the state machine, taxonomy,
     or scoring.
     """
@@ -52,10 +52,14 @@ def get_brain(profile: ProviderProfile) -> Brain:
         from suth.brain.providers.ollama import OllamaBrain
 
         return OllamaBrain(profile)
+    if profile.provider == "anthropic":
+        from suth.brain.providers.anthropic import AnthropicBrain
 
-    # Seam for Phase 6: adding a provider means writing one adapter here, not
-    # touching the state machine, taxonomy, or scoring.
+        return AnthropicBrain(profile)
+
+    # Adding a provider means writing one adapter here, not touching the
+    # state machine, taxonomy, or scoring.
     raise NotImplementedError(
-        f"provider '{profile.provider}' has no adapter yet — only 'ollama' is "
-        "implemented (Phase 1); add suth.brain.providers.{profile.provider} in Phase 6"
+        f"provider '{profile.provider}' has no adapter yet — implemented: 'ollama', "
+        f"'anthropic'; add suth.brain.providers.{profile.provider}"
     )

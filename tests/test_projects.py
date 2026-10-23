@@ -1,11 +1,9 @@
 import json
-from pathlib import Path
 
 import pytest
 
-from suth.config import SuthConfig
 from suth.mcp_server.registry import ProjectRegistry
-from suth.projects.filesystem import browse, config_at
+from suth.projects.filesystem import PathNotAllowedError, browse, config_at
 from suth.projects.service import (
     CreateProjectRequest,
     ProjectAlreadyExistsError,
@@ -40,7 +38,8 @@ def registry(tmp_path):
     return ProjectRegistry(registry_path)
 
 
-def test_browse_lists_directories(registry, tmp_path):
+def test_browse_lists_directories(registry, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUTH_BROWSE_ROOTS", str(tmp_path.parent))
     (tmp_path / "suth-test-app").mkdir()
     (tmp_path / "node_modules").mkdir()
 
@@ -125,3 +124,56 @@ def test_create_project_rejects_duplicate(registry):
     create_project(registry, memory, req)
     with pytest.raises(ProjectAlreadyExistsError):
         create_project(registry, memory, req)
+
+
+def test_browse_rejects_paths_outside_allowed_roots(registry, tmp_path, monkeypatch):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    monkeypatch.setenv("SUTH_BROWSE_ROOTS", str(tmp_path / "nowhere"))
+
+    with pytest.raises(PathNotAllowedError):
+        browse(registry, str(outside))
+    with pytest.raises(PathNotAllowedError):
+        browse(registry, "../" + outside.name)  # `..` is resolved before the check
+    with pytest.raises(PathNotAllowedError):
+        config_at(registry, "/etc")
+
+
+def test_browse_hides_parent_outside_allowed_roots(registry, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUTH_BROWSE_ROOTS", str(tmp_path / "nowhere"))
+
+    assert browse(registry, ".")["parent"] is None
+
+
+def test_create_project_rejects_dir_outside_allowed_roots(registry, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUTH_BROWSE_ROOTS", str(tmp_path / "nowhere"))
+    target = tmp_path.parent / f"{tmp_path.name}-escape"
+    req = CreateProjectRequest(
+        project_id="escape",
+        name="Escape",
+        config_dir=str(target),
+        config=default_config("escape", "http://localhost:9999"),
+    )
+
+    with pytest.raises(PathNotAllowedError):
+        create_project(registry, FakeMemory(), req)
+    assert not target.exists()
+
+
+def test_registry_resolves_relative_config_against_registry_dir(registry, tmp_path, monkeypatch):
+    config_dir = tmp_path / "apps" / "demo-app"
+    config_dir.mkdir(parents=True)
+    (config_dir / "suth_config.json").write_text("{}")
+    registry.register("demo-app", config_dir / "suth_config.json")
+    monkeypatch.chdir(tmp_path / "apps")  # cwd must not matter
+
+    assert registry.resolved_config_path("demo-app") == (config_dir / "suth_config.json").resolve()
+
+
+def test_registry_sees_projects_registered_by_another_process(registry, tmp_path):
+    other = ProjectRegistry(registry.path)
+    config = tmp_path / "suth_config.json"
+    config.write_text("{}")
+    other.register("late-app", config)
+
+    assert "late-app" in registry.list_project_ids()

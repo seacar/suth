@@ -14,7 +14,7 @@ def _signature(path: Path) -> float:
 
 
 def watch_and_rerun(
-    path: str, run_once: Callable[[], None], poll_interval: float = 1.0
+    path: str, run_once: Callable[[], object], poll_interval: float = 1.0
 ) -> None:
     """Re-run `run_once` whenever anything under `path` changes — plan §5.1's
     `--watch` mode. Polling-based (no extra dependency); fine at dev-loop

@@ -20,6 +20,13 @@ secret "mcp_caller_tokens" {
   }
 }
 
+# Shared bearer token between the web app and the Local Control API, so no
+# other site open in the user's browser can drive the API. Auto-generated —
+# nothing to configure.
+secret "api_token" {
+  generated = true
+}
+
 build "cli" {
   base = "python"
 }
@@ -41,6 +48,7 @@ service "cli" {
     ANTHROPIC_API_KEY = secret.anthropic_api_key
     OPENAI_API_KEY    = secret.openai_api_key
     MCP_CALLER_TOKENS = secret.mcp_caller_tokens
+    SUTH_API_TOKEN    = secret.api_token
   }
 }
 
@@ -66,6 +74,7 @@ service "api" {
     S3_BUCKET          = storage.screenshots.bucket
     ANTHROPIC_API_KEY  = secret.anthropic_api_key
     OPENAI_API_KEY     = secret.openai_api_key
+    SUTH_API_TOKEN     = secret.api_token
     CORS_ORIGIN        = "https://${service.web.public_url}"
   }
 
@@ -94,8 +103,9 @@ service "web" {
   }
 
   env = {
-    PORT    = port
-    API_URL = "https://${service.api.public_url}"
+    PORT           = port
+    API_URL        = "https://${service.api.public_url}"
+    SUTH_API_TOKEN = secret.api_token
   }
 
   dev {

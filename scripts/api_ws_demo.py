@@ -4,10 +4,12 @@ and step-through gating (Phase 5). Not part of the pytest suite — this
 exercises real HTTP + WebSocket I/O against a running `specific dev` api
 service, same as the macOS GUI would.
 
-Run: .venv/bin/python scripts/api_ws_demo.py [--step]
+Run: specific exec cli -- .venv/bin/python scripts/api_ws_demo.py [--step]
+(`specific exec` injects SUTH_API_TOKEN, which the API requires.)
 """
 
 import asyncio
+import os
 import sys
 
 import httpx
@@ -15,11 +17,13 @@ import websockets
 
 API = "http://localhost:3001"
 WS = "ws://localhost:3001"
+TOKEN = os.environ.get("SUTH_API_TOKEN", "")
+HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 
 
 async def main() -> None:
     step_through = "--step" in sys.argv
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(headers=HEADERS) as client:
         resp = await client.post(
             f"{API}/runs",
             json={
@@ -35,7 +39,7 @@ async def main() -> None:
         session_id = resp.json()["session_id"]
         print(f"started session {session_id} (step_through={step_through})")
 
-        async with websockets.connect(f"{WS}/runs/{session_id}/stream") as ws:
+        async with websockets.connect(f"{WS}/runs/{session_id}/stream", additional_headers=HEADERS) as ws:
             async for raw in ws:
                 import json
 

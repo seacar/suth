@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -68,7 +68,7 @@ def test_set_video_persists_ref_and_start_time():
         model_used="OllamaBrain",
     )
 
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     memory.set_video(session_id, f"sessions/{session_id}/replay.webm", started_at, 18.5)
 
     session_row = memory.get_session(session_id)

@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from suth.mcp_server.registry import ProjectRegistry
@@ -34,12 +35,30 @@ def relative_path(root: Path, path: Path) -> str:
     return format_path(root, path)
 
 
+class PathNotAllowedError(Exception):
+    """A browse/config path resolved outside every allowed root."""
+
+
+def allowed_roots(registry: ProjectRegistry) -> list[Path]:
+    """Directories the project browser may read and write under: the
+    registry's own directory, plus SUTH_BROWSE_ROOTS (os.pathsep-separated),
+    which defaults to the user's home directory."""
+    raw = os.environ.get("SUTH_BROWSE_ROOTS")
+    extra = [p for p in raw.split(os.pathsep) if p.strip()] if raw else [str(Path.home())]
+    return [project_root(registry), *(Path(p).expanduser().resolve() for p in extra)]
+
+
+def is_allowed(registry: ProjectRegistry, path: Path) -> bool:
+    return any(path == root or path.is_relative_to(root) for root in allowed_roots(registry))
+
+
 def resolve_under_root(registry: ProjectRegistry, rel_path: str) -> Path:
     """Resolve a browse/config path.
 
     Relative paths (including `.` and `./…`) are rooted at the registry's
     project directory. Absolute paths and `~` are allowed so the GUI can
-    point a config at another local app.
+    point a config at another local app — but only inside allowed_roots(),
+    since these paths come from API callers and are listed, read and written.
     """
     root = project_root(registry)
     clean = (rel_path or ".").strip()
@@ -53,7 +72,12 @@ def resolve_under_root(registry: ProjectRegistry, rel_path: str) -> Path:
         if clean in ("", "."):
             return root
         candidate = root / clean
-    return candidate.resolve()
+    resolved = candidate.resolve()  # resolves `..` and symlinks before the check
+    if not is_allowed(registry, resolved):
+        raise PathNotAllowedError(
+            f"{rel_path!r} is outside the allowed directories; set SUTH_BROWSE_ROOTS to widen them"
+        )
+    return resolved
 
 
 def config_file_in_dir(directory: Path) -> Path:
@@ -61,8 +85,7 @@ def config_file_in_dir(directory: Path) -> Path:
 
 
 def resolve_registered_config_path(registry: ProjectRegistry, project_id: str) -> Path:
-    stored = registry.config_path(project_id)
-    return resolve_under_root(registry, stored)
+    return registry.resolved_config_path(project_id)
 
 
 def browse(registry: ProjectRegistry, rel_path: str = ".") -> dict:
@@ -72,7 +95,11 @@ def browse(registry: ProjectRegistry, rel_path: str = ".") -> dict:
 
     root = project_root(registry)
     parent_path = current.parent
-    parent = None if parent_path == current else format_path(root, parent_path)
+    parent = (
+        None
+        if parent_path == current or not is_allowed(registry, parent_path)
+        else format_path(root, parent_path)
+    )
 
     entries = []
     try:

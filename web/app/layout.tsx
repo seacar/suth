@@ -30,11 +30,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // Read at request time (Server Component), not baked in at build — build-time
   // code can't see specific.hcl env vars (DATABASE_URL, API_URL, ...).
   const apiBaseUrl = process.env.API_URL ?? "http://localhost:3001";
+  const apiToken = process.env.SUTH_API_TOKEN || null;
 
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`}>
       <body>
-        <ApiProvider apiBaseUrl={apiBaseUrl}>
+        <ApiProvider apiBaseUrl={apiBaseUrl} apiToken={apiToken}>
           <ProjectProvider>
             <GlobalEvents />
             <Nav />

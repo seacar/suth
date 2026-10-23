@@ -1,7 +1,6 @@
-import json
-
 import httpx
 
+from suth.brain.decode import decide_with_retry
 from suth.brain.interface import ProviderProfile
 from suth.brain.prompt import system_prompt, user_prompt
 from suth.brain.schema import StepDecision
@@ -32,27 +31,7 @@ class OllamaBrain:
             {"role": "system", "content": system_prompt(persona, objective)},
             {"role": "user", "content": user_prompt(history_text, dom_state)},
         ]
-        raw = self._chat(messages)
-        try:
-            return StepDecision.model_validate(json.loads(raw))
-        except (json.JSONDecodeError, ValueError) as e:
-            # One nudge-and-retry: models occasionally wrap JSON in prose despite
-            # format="json"; ask once more before giving up loudly.
-            messages.append({"role": "assistant", "content": raw})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "That was not a single valid JSON object matching the "
-                    "contract. Respond again with ONLY the JSON object.",
-                }
-            )
-            raw2 = self._chat(messages)
-            try:
-                return StepDecision.model_validate(json.loads(raw2))
-            except (json.JSONDecodeError, ValueError) as e2:
-                raise RuntimeError(
-                    f"ollama returned invalid StepDecision JSON twice: {raw2!r}"
-                ) from e2
+        return decide_with_retry(self._chat, messages, provider="ollama")
 
     def _chat(self, messages: list[dict]) -> str:
         resp = self._client.post(

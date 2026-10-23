@@ -13,22 +13,28 @@ import dataclasses
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
+from suth.api.auth import ApiTokenMiddleware
 from suth.api.events import bus
-from suth.brain.interface import get_brain
 from suth.compare import compare_runs as _compare_runs
-from suth.config import load_config
 from suth.db import Memory, get_engine
-from suth.mcp_server.registry import ProjectRegistry, UnregisteredProjectError
-from suth.orchestrator import BudgetExceededError, ConcurrencyLimitError, Orchestrator
+from suth.mcp_server.registry import ProjectRegistry
+from suth.orchestrator import (
+    BudgetExceededError,
+    ConcurrencyLimitError,
+    Orchestrator,
+    SessionNotFinishedError,
+)
 from suth.personas.repository import list_personas as _list_personas
-from suth.personas.repository import load_persona_from_db, save_persona
+from suth.personas.repository import save_persona
 from suth.personas.schema import Persona
+from suth.projects.filesystem import PathNotAllowedError
 from suth.projects.filesystem import browse as _browse_projects
 from suth.projects.service import (
     CreateProjectRequest,
@@ -37,14 +43,32 @@ from suth.projects.service import (
     ProjectDeleteBlockedError,
     ProjectNotFoundError,
     UpdateProjectRequest,
+)
+from suth.projects.service import (
     create_project as _create_project,
+)
+from suth.projects.service import (
     delete_project as _delete_project,
+)
+from suth.projects.service import (
     get_project as _get_project,
+)
+from suth.projects.service import (
     inspect_config_dir as _inspect_config_dir,
+)
+from suth.projects.service import (
     list_projects as _list_projects,
+)
+from suth.projects.service import (
     update_project as _update_project,
 )
-from suth.session import SessionResult
+from suth.runs import (
+    RunSetupError,
+    load_personas,
+    make_brain,
+    resolve_run_config,
+    result_dict,
+)
 
 _registry = ProjectRegistry()
 _memory = Memory(get_engine())
@@ -57,7 +81,7 @@ async def _completion_watcher() -> None:
     """The only state every surface (CLI/MCP/API, each its own process)
     shares is Postgres — so "notify on any completion" is a poll, not a
     push. Good enough for a personal dev tool at a 2s cadence."""
-    since = datetime.now(timezone.utc)
+    since = datetime.now(UTC)
     while True:
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
         finished = _memory.list_recently_finished(since)
@@ -85,26 +109,31 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="suth Local Control API", lifespan=lifespan)
 
+# Registered before CORS so CORS ends up outermost: a 401 still carries CORS
+# headers and the web app sees the real status instead of an opaque CORS error.
+app.add_middleware(ApiTokenMiddleware, token=os.environ.get("SUTH_API_TOKEN"))
+
 # The web app (service "web") is a separate origin from this API — allow it
-# through CORS. Falls back to "*" so `uvicorn suth.api.app:app` still works
-# when run standalone, outside `specific dev`.
+# through CORS. Standalone (outside `specific dev`) falls back to the local
+# Next dev server, never "*": any site the user visits could otherwise drive
+# this API from their browser.
+DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.environ["CORS_ORIGIN"]] if os.environ.get("CORS_ORIGIN") else ["*"],
+    allow_origins=(
+        [o.strip() for o in os.environ["CORS_ORIGIN"].split(",") if o.strip()]
+        if os.environ.get("CORS_ORIGIN")
+        else DEFAULT_CORS_ORIGINS
+    ),
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-def _result_dict(result: SessionResult) -> dict:
-    return {
-        "session_id": result.session_id,
-        "verdict": result.verdict,
-        "step_count": result.step_count,
-        "final_frustration": result.final_frustration,
-        "friction_score": result.friction_score,
-        "failures": [dataclasses.asdict(h) for h in result.failures],
-    }
+@app.exception_handler(PathNotAllowedError)
+async def _path_not_allowed(_request: Request, exc: PathNotAllowedError) -> JSONResponse:
+    # Raised from any browse/config/create path that escapes the allowed roots.
+    return JSONResponse({"detail": str(exc)}, status_code=403)
 
 
 @app.get("/healthz")
@@ -202,7 +231,11 @@ class RunRequest(BaseModel):
     caller: str | None = "api"
 
 
-def _make_on_step(session_id: str, step_through: bool):
+class StepThroughAbandoned(Exception):
+    """No client sent "continue" before the session's own deadline."""
+
+
+def _make_on_step(session_id: str, step_through: bool, timeout_seconds: float):
     def on_step(step_index, record):
         bus.publish(
             session_id,
@@ -222,7 +255,13 @@ def _make_on_step(session_id: str, step_through: bool):
         if step_through:
             gate = bus.gate_for(session_id)
             gate.clear()
-            gate.wait()
+            # Bounded by the session's wall-clock budget: if the watching
+            # client went away, the worker thread must not block forever
+            # (and keep the run "running", blocking project deletion).
+            if not gate.wait(timeout=timeout_seconds):
+                raise StepThroughAbandoned(
+                    f"no 'continue' received within {timeout_seconds}s in step-through mode"
+                )
 
     return on_step
 
@@ -230,23 +269,14 @@ def _make_on_step(session_id: str, step_through: bool):
 @app.post("/runs")
 def start_run(req: RunRequest) -> dict:
     try:
-        config_path = _registry.config_path(req.project_id)
-    except UnregisteredProjectError as e:
-        raise HTTPException(404, str(e)) from e
-
-    config = load_config(config_path)
-    try:
-        resolved = config.resolve(req.environment)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    if req.headed is not None:
-        resolved.headed = req.headed
-
-    persona = load_persona_from_db(_memory.engine, req.persona_id)
-    brain = get_brain(resolved.provider_profile)
+        resolved = resolve_run_config(_registry, req.project_id, req.environment, req.headed)
+        (persona,) = load_personas(_memory.engine, [req.persona_id])
+        brain = make_brain(resolved.provider_profile)
+    except RunSetupError as e:
+        raise HTTPException(e.status, str(e)) from e
 
     session_id = str(uuid.uuid4())
-    on_step = _make_on_step(session_id, req.step_through)
+    on_step = _make_on_step(session_id, req.step_through, resolved.timeout_seconds)
 
     try:
         _orchestrator.start_session(
@@ -280,9 +310,11 @@ def run_status(session_id: str) -> dict:
 @app.get("/runs/{session_id}/report")
 def run_report(session_id: str) -> dict:
     try:
-        return _result_dict(_orchestrator.get_report(session_id))
+        return result_dict(_orchestrator.get_report(session_id))
     except KeyError as e:
         raise HTTPException(404, str(e)) from e
+    except SessionNotFinishedError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 def _with_offsets(session: dict, steps: list[dict]) -> list[dict]:
@@ -396,32 +428,22 @@ def start_batch(req: BatchRequest) -> dict:
     one batch_id. Each member gets its own /runs/{id}/stream WebSocket, same
     as a solo run — no new streaming plumbing needed for N-at-once."""
     try:
-        config_path = _registry.config_path(req.project_id)
-    except UnregisteredProjectError as e:
-        raise HTTPException(404, str(e)) from e
-
-    config = load_config(config_path)
-    try:
-        resolved = config.resolve(req.environment)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    if req.headed is not None:
-        resolved.headed = req.headed
-
-    try:
-        personas = [load_persona_from_db(_memory.engine, pid) for pid in req.persona_ids]
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e)) from e
+        resolved = resolve_run_config(_registry, req.project_id, req.environment, req.headed)
+        personas = load_personas(_memory.engine, req.persona_ids)
+        # Fail fast on a missing adapter/credential before fanning out N sessions.
+        make_brain(resolved.provider_profile)
+    except RunSetupError as e:
+        raise HTTPException(e.status, str(e)) from e
 
     def on_step_factory(session_id: str):
-        return _make_on_step(session_id, step_through=False)
+        return _make_on_step(session_id, False, resolved.timeout_seconds)
 
     try:
         batch_id = _orchestrator.start_batch(
             config=resolved,
             personas=personas,
             objective=req.objective,
-            brain_factory=lambda: get_brain(resolved.provider_profile),
+            brain_factory=lambda: make_brain(resolved.provider_profile),
             environment=req.environment,
             caller=req.caller,
             on_step_factory=on_step_factory,
@@ -435,7 +457,7 @@ def start_batch(req: BatchRequest) -> dict:
 
     return {
         "batch_id": batch_id,
-        "sessions": [{"session_id": sid, "persona_id": pid} for sid, pid in zip(session_ids, req.persona_ids)],
+        "sessions": [{"session_id": sid, "persona_id": pid} for sid, pid in zip(session_ids, req.persona_ids, strict=True)],
     }
 
 

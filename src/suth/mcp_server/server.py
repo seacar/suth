@@ -14,17 +14,20 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
-from suth.brain.interface import get_brain
 from suth.compare import compare_runs as _compare_runs
-from suth.config import load_config
 from suth.db import Memory, get_engine
 from suth.mcp_server.caller import resolve_caller
-from suth.mcp_server.registry import ProjectRegistry, UnregisteredProjectError
-from suth.orchestrator import BudgetExceededError, ConcurrencyLimitError, Orchestrator
+from suth.mcp_server.registry import ProjectRegistry
+from suth.orchestrator import (
+    BudgetExceededError,
+    ConcurrencyLimitError,
+    Orchestrator,
+    SessionNotFinishedError,
+)
 from suth.personas.repository import list_personas as _list_personas
 from suth.personas.repository import load_persona_from_db, save_persona
 from suth.personas.schema import Persona
-from suth.session import SessionResult
+from suth.runs import RunSetupError, load_personas, make_brain, resolve_run_config, result_dict
 
 mcp = MCPServer(
     "suth",
@@ -40,17 +43,6 @@ _memory = Memory(get_engine())
 _orchestrator = Orchestrator(memory=_memory)
 
 ALLOWED_MCP_ENVIRONMENTS = ("ci", "agent")
-
-
-def _result_dict(result: SessionResult) -> dict:
-    return {
-        "session_id": result.session_id,
-        "verdict": result.verdict,
-        "step_count": result.step_count,
-        "final_frustration": result.final_frustration,
-        "friction_score": result.friction_score,
-        "failures": [dataclasses.asdict(h) for h in result.failures],
-    }
 
 
 @mcp.tool()
@@ -99,14 +91,11 @@ def run_audit(
         raise ToolError(f"mode must be 'sync' or 'async', got {mode!r}")
 
     try:
-        config_path = _registry.config_path(project_id)
-    except UnregisteredProjectError as e:
+        resolved = resolve_run_config(_registry, project_id, environment)
+        (persona,) = load_personas(_memory.engine, [persona_id])
+        brain = make_brain(resolved.provider_profile)
+    except RunSetupError as e:
         raise ToolError(str(e)) from e
-
-    config = load_config(config_path)
-    resolved = config.resolve(environment)
-    persona = load_persona_from_db(_memory.engine, persona_id)
-    brain = get_brain(resolved.provider_profile)
     caller = resolve_caller()
 
     try:
@@ -123,7 +112,7 @@ def run_audit(
 
     if mode == "async":
         return {"session_id": session_id, "status": "running"}
-    return _result_dict(_orchestrator.get_report(session_id))
+    return result_dict(_orchestrator.get_report(session_id))
 
 
 @mcp.tool()
@@ -148,15 +137,10 @@ def run_audit_matrix(
         raise ToolError("persona_ids must be non-empty")
 
     try:
-        config_path = _registry.config_path(project_id)
-    except UnregisteredProjectError as e:
-        raise ToolError(str(e)) from e
-
-    config = load_config(config_path)
-    resolved = config.resolve(environment)
-    try:
-        personas = [load_persona_from_db(_memory.engine, pid) for pid in persona_ids]
-    except FileNotFoundError as e:
+        resolved = resolve_run_config(_registry, project_id, environment)
+        personas = load_personas(_memory.engine, persona_ids)
+        make_brain(resolved.provider_profile)  # fail fast before fanning out
+    except RunSetupError as e:
         raise ToolError(str(e)) from e
     caller = resolve_caller()
 
@@ -165,7 +149,7 @@ def run_audit_matrix(
             config=resolved,
             personas=personas,
             objective=objective,
-            brain_factory=lambda: get_brain(resolved.provider_profile),
+            brain_factory=lambda: make_brain(resolved.provider_profile),
             environment=environment,
             caller=caller,
         )
@@ -176,7 +160,7 @@ def run_audit_matrix(
         session_ids = _orchestrator.get_batch_session_ids(batch_id)
         return {
             "batch_id": batch_id,
-            "sessions": [{"session_id": sid, "persona_id": pid} for sid, pid in zip(session_ids, persona_ids)],
+            "sessions": [{"session_id": sid, "persona_id": pid} for sid, pid in zip(session_ids, persona_ids, strict=True)],
         }
 
     members = _orchestrator.get_batch_report(batch_id)
@@ -186,7 +170,7 @@ def run_audit_matrix(
             {
                 "session_id": m.session_id,
                 "persona_id": m.persona_id,
-                "report": _result_dict(m.result) if m.result else None,
+                "report": result_dict(m.result) if m.result else None,
                 "error": m.error,
             }
             for m in members
@@ -197,19 +181,30 @@ def run_audit_matrix(
 @mcp.tool()
 def get_session_status(session_id: str) -> dict:
     """Poll a session started with mode='async'."""
-    return {"session_id": session_id, "status": _orchestrator.get_status(session_id)}
+    try:
+        return {"session_id": session_id, "status": _orchestrator.get_status(session_id)}
+    except KeyError as e:
+        raise ToolError(str(e)) from e
 
 
 @mcp.tool()
 def get_session_report(session_id: str) -> dict:
-    """Block until `session_id` finishes (if still running) and return its report."""
-    return _result_dict(_orchestrator.get_report(session_id))
+    """Block until `session_id` finishes (if still running) and return its report.
+    Sessions started by another process are read back from the database once
+    they've finished."""
+    try:
+        return result_dict(_orchestrator.get_report(session_id))
+    except (KeyError, SessionNotFinishedError) as e:
+        raise ToolError(str(e)) from e
 
 
 @mcp.tool()
 def compare_runs(session_id_a: str, session_id_b: str, regression_threshold: float = 0.0) -> dict:
     """Diff two sessions' friction scores + taxonomy hits."""
-    comparison = _compare_runs(_memory, session_id_a, session_id_b, regression_threshold)
+    try:
+        comparison = _compare_runs(_memory, session_id_a, session_id_b, regression_threshold)
+    except KeyError as e:
+        raise ToolError(str(e)) from e
     return dataclasses.asdict(comparison)
 
 

@@ -2,32 +2,43 @@
 
 import { createContext, useContext, useMemo } from "react";
 
-const ApiBaseUrlContext = createContext<string | null>(null);
+interface ApiConfig {
+  baseUrl: string;
+  /** SUTH_API_TOKEN; null when the API runs without auth. */
+  token: string | null;
+}
+
+const ApiConfigContext = createContext<ApiConfig | null>(null);
 
 export function ApiProvider({
   apiBaseUrl,
+  apiToken,
   children,
 }: {
   apiBaseUrl: string;
+  apiToken: string | null;
   children: React.ReactNode;
 }) {
-  return <ApiBaseUrlContext.Provider value={apiBaseUrl}>{children}</ApiBaseUrlContext.Provider>;
+  const value = useMemo(() => ({ baseUrl: apiBaseUrl, token: apiToken }), [apiBaseUrl, apiToken]);
+  return <ApiConfigContext.Provider value={value}>{children}</ApiConfigContext.Provider>;
 }
 
-export function useApiBaseUrl(): string {
-  const value = useContext(ApiBaseUrlContext);
-  if (!value) throw new Error("useApiBaseUrl must be used within an ApiProvider");
+function useApiConfig(): ApiConfig {
+  const value = useContext(ApiConfigContext);
+  if (!value) throw new Error("useApi must be used within an ApiProvider");
   return value;
 }
 
 /** Talks only to the Local Control API — never Postgres directly, and never
  * re-implements any harness logic (mirrors gui/Sources/SuthGUI/APIClient.swift). */
 export function useApi() {
-  const baseUrl = useApiBaseUrl();
+  const { baseUrl, token } = useApiConfig();
 
   return useMemo(() => {
     async function request<T>(path: string, init?: RequestInit): Promise<T> {
-      const res = await fetch(`${baseUrl}${path}`, init);
+      const headers = new Headers(init?.headers);
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const res = await fetch(`${baseUrl}${path}`, { ...init, headers });
       if (!res.ok) {
         const message = await res.text().catch(() => `HTTP ${res.status}`);
         let detail = message || `HTTP ${res.status}`;
@@ -42,20 +53,28 @@ export function useApi() {
       return res.json() as Promise<T>;
     }
 
-    function wsUrl(path: string): string {
+    // WebSockets and <img>/<video> can't send an Authorization header, so
+    // those URLs carry the token as a query parameter instead.
+    function authedUrl(path: string): URL {
       const url = new URL(`${baseUrl}${path}`);
+      if (token) url.searchParams.set("token", token);
+      return url;
+    }
+
+    function wsUrl(path: string): string {
+      const url = authedUrl(path);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       return url.toString();
     }
 
     function screenshotUrl(sessionId: string, stepIndex: number): string {
-      return `${baseUrl}/runs/${sessionId}/screenshots/${stepIndex}`;
+      return authedUrl(`/runs/${sessionId}/screenshots/${stepIndex}`).toString();
     }
 
     function videoUrl(sessionId: string): string {
-      return `${baseUrl}/runs/${sessionId}/video`;
+      return authedUrl(`/runs/${sessionId}/video`).toString();
     }
 
     return { baseUrl, request, wsUrl, screenshotUrl, videoUrl };
-  }, [baseUrl]);
+  }, [baseUrl, token]);
 }

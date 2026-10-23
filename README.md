@@ -178,8 +178,10 @@ a small Next.js dashboard for watching runs live.
 
 Any MCP-aware agent (including a Claude Code session working on a *different*
 project) can call the harness as a tool. Projects must be pre-registered in
-[`mcp_projects.json`](mcp_projects.json) (project_id → `suth_config.json`
-path) — a caller can never point a session at an arbitrary URL.
+`mcp_projects.json` (project_id → `suth_config.json` path; gitignored because
+entries are machine-specific, and `./start.sh` creates it from
+[`mcp_projects.example.json`](mcp_projects.example.json)) — a caller can never
+point a session at an arbitrary URL.
 
 ```bash
 # stdio (Claude Code / Claude Desktop) — use an absolute path to this checkout
@@ -235,10 +237,19 @@ specific exec cli -- .venv/bin/uvicorn suth.api.app:app   # standalone
 - `WS /events` — every session's completion, from any process (CI, MCP,
   another dev's CLI run) — polls Postgres every 2s since that's the only
   state every surface actually shares.
+- Every endpoint except `/healthz` requires `SUTH_API_TOKEN` when it is set,
+  as `Authorization: Bearer <token>` or a `?token=` query parameter (for
+  WebSockets and media URLs). `specific.hcl` generates the token and hands it
+  to the `api`, `web` and `cli` services, so `specific dev` and
+  `specific exec cli -- …` need no setup. Standalone `uvicorn` without the
+  variable runs unauthenticated, so keep it on localhost.
 - CORS is enabled for `CORS_ORIGIN` (the `web` service's own origin, wired
-  through `specific.hcl`) so the web app can call the API directly from the
-  browser — falls back to `*` when that env var is unset (e.g. running
-  `uvicorn` standalone).
+  through `specific.hcl`; comma-separate several). When it is unset it falls
+  back to `http://localhost:3000`, never `*`.
+- The project folder browser (`/projects/browse`, `/projects/config-at`,
+  `POST /projects`) only reaches the registry's directory and
+  `SUTH_BROWSE_ROOTS` (`:`-separated; defaults to your home directory).
+  Anything else returns 403.
 - [`web/`](web) — a Next.js app that's a thin client over this same API:
   Run page with live transcript (solo + parallel batch runs), History with a
   sparkline and transcript detail, Compare, a persona editor, and
@@ -257,7 +268,7 @@ specific exec cli -- .venv/bin/python -m pytest   # includes the Postgres smoke 
 ```
 src/suth/
   personas/       persona schema, YAML loader + Postgres repository, built-in library
-  brain/          LLM Router: StepDecision schema, provider interface, prompt, Ollama adapter
+  brain/          LLM Router: StepDecision schema, provider interface, prompt, Ollama + Anthropic adapters
   driver/         Playwright wrapper: DOM snapshot, action executor, origin/keyboard guardrails
   abandonment.py  abandonment-rule evaluator (rage quit / stall / loop detection)
   taxonomy.py     post-session failure-taxonomy classifier
@@ -277,7 +288,7 @@ src/suth/
                   bridge (events.py)
 
 examples/ci/      GitHub Actions templates for a target project's PR-gating CI
-mcp_projects.json server-side allowlist of project_id -> suth_config.json path
+mcp_projects.example.json  template for the server-side project_id -> suth_config.json allowlist
 web/              Next.js web app — a thin client over the Local Control API
 ```
 

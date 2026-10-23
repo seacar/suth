@@ -61,7 +61,12 @@ def save_credentials(values: dict[str, str], root: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_credentials(root)
     existing.update({key: value for key, value in values.items() if value})
-    path.write_text(json.dumps(existing, indent=2) + "\n")
+    # Create with 0o600 up front: write-then-chmod leaves the API keys
+    # readable with default permissions for a moment. The chmod still covers
+    # a file that already existed with looser permissions.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(existing, indent=2) + "\n")
     path.chmod(0o600)
 
 

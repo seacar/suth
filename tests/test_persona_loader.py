@@ -2,7 +2,6 @@ import pytest
 from pydantic import ValidationError
 
 from suth.personas.loader import LIBRARY_DIR, load_persona, load_persona_file
-from suth.personas.schema import Persona
 
 STARTER_LIBRARY = [
     "impatient-mobile-shopper-v2",

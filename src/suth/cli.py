@@ -150,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     memory = None if args.no_db else Memory(get_engine())
-    load_one = (lambda pid: load_persona(pid)) if args.no_db else (lambda pid: load_persona_from_db(memory.engine, pid))
+    def load_one(pid: str):
+        return load_persona(pid) if memory is None else load_persona_from_db(memory.engine, pid)
 
     objective_check = None
     if args.expect_url_pattern:

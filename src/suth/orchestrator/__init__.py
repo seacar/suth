@@ -3,6 +3,9 @@ from suth.orchestrator.service import (
     BudgetExceededError,
     ConcurrencyLimitError,
     Orchestrator,
+    SessionNotFinishedError,
 )
 
-__all__ = ["Orchestrator", "ConcurrencyLimitError", "BudgetExceededError", "BatchMemberResult"]
+__all__ = ["Orchestrator", "ConcurrencyLimitError", "BudgetExceededError", "BatchMemberResult",
+    "SessionNotFinishedError",
+]

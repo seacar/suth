@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from datetime import UTC
 
 import pytest
 
@@ -224,10 +225,10 @@ def test_run_status_404_for_unknown_session():
 
 @requires_db
 def test_sessions_recent_filters_by_project():
-    from suth.db import Memory, get_engine
     from fastapi.testclient import TestClient
 
     from suth.api.app import app
+    from suth.db import Memory, get_engine
 
     memory = Memory(get_engine())
     project_id = f"api-test-{uuid.uuid4().hex[:8]}"
@@ -249,11 +250,11 @@ def test_sessions_recent_filters_by_project():
 
 @requires_db
 def test_compare_endpoint_matches_direct_call():
-    from suth.compare import compare_runs
-    from suth.db import Memory, get_engine
     from fastapi.testclient import TestClient
 
     from suth.api.app import app
+    from suth.compare import compare_runs
+    from suth.db import Memory, get_engine
 
     memory = Memory(get_engine())
     project_id = f"api-compare-{uuid.uuid4().hex[:8]}"
@@ -281,7 +282,7 @@ def test_compare_endpoint_matches_direct_call():
 
 @requires_db
 def test_transcript_includes_offset_seconds_synced_to_video():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime
 
     from fastapi.testclient import TestClient
 
@@ -297,7 +298,7 @@ def test_transcript_includes_offset_seconds_synced_to_video():
         objective="x", environment="dev", model_used="test",
     )
 
-    video_started_at = datetime.now(timezone.utc)
+    video_started_at = datetime.now(UTC)
     memory.set_video(session_id, f"sessions/{session_id}/replay.webm", video_started_at)
     memory.log_step(
         session_id=session_id, step_index=1, thought="t", emotion="neutral",
@@ -381,3 +382,32 @@ def test_get_batch_404_for_unknown_batch():
     with TestClient(app) as client:
         resp = client.get(f"/batches/{uuid.uuid4()}")
         assert resp.status_code == 404
+
+
+@requires_db
+def test_start_run_maps_setup_errors_to_client_errors():
+    from fastapi.testclient import TestClient
+
+    from suth.api.app import app
+
+    base = {"objective": "x", "environment": "dev"}
+    with TestClient(app) as client:
+        unknown_project = client.post("/runs", json={**base, "project_id": "nope", "persona_id": "power-user-v1"})
+        assert unknown_project.status_code == 404
+        unknown_persona = client.post("/runs", json={**base, "project_id": "suth-test-app", "persona_id": "nobody"})
+        assert unknown_persona.status_code == 404
+        bad_env = client.post(
+            "/runs", json={**base, "project_id": "suth-test-app", "persona_id": "power-user-v1", "environment": "zz"}
+        )
+        assert bad_env.status_code == 400
+
+
+@requires_db
+def test_browse_outside_allowed_roots_is_forbidden(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from suth.api.app import app
+
+    monkeypatch.setenv("SUTH_BROWSE_ROOTS", "/nonexistent-root")
+    with TestClient(app) as client:
+        assert client.get("/projects/browse", params={"path": "/etc"}).status_code == 403

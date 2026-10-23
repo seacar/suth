@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
+from typing import Any
 
 import boto3
 from botocore.client import Config
 
 
-def get_bucket() -> tuple[object, str]:
+def get_bucket() -> tuple[Any, str]:
     """Return (s3_client, bucket_name) from `specific dev`-injected env vars."""
     endpoint = os.environ["S3_ENDPOINT"]
     bucket = os.environ["S3_BUCKET"]

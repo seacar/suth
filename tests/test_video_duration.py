@@ -1,5 +1,5 @@
 import struct
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from suth.video import duration_from_session_times, duration_from_webm_bytes, read_webm_duration_seconds
@@ -33,7 +33,7 @@ def test_read_webm_duration_seconds_missing_file(tmp_path: Path):
 
 
 def test_duration_from_session_times():
-    started = datetime(2026, 8, 29, 20, 2, 30, tzinfo=timezone.utc)
+    started = datetime(2026, 8, 29, 20, 2, 30, tzinfo=UTC)
     ended = started + timedelta(seconds=18.25)
     assert duration_from_session_times(ended, started) == 18.25
     assert duration_from_session_times(None, started) is None

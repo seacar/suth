@@ -5,11 +5,11 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from suth.config import SuthConfig, load_config
-from suth.db import Memory
 from suth.credentials import (
     credential_is_configured,
     save_credentials,
 )
+from suth.db import Memory
 from suth.mcp_server.registry import ProjectRegistry
 from suth.projects.filesystem import (
     config_at,

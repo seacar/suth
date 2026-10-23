@@ -20,25 +20,31 @@ declare global {
 export function FolderBrowser({ path, onPathChange }: FolderBrowserProps) {
   const api = useApi();
   const [browse, setBrowse] = useState<BrowseResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Keyed by path so an error from a previous path disappears on navigation.
+  const [errorState, setErrorState] = useState<{ path: string; message: string } | null>(null);
+  const error = errorState?.path === path ? errorState.message : null;
+  const setError = (message: string) => setErrorState({ path, message });
   const [draftPath, setDraftPath] = useState(path);
   const [pickedName, setPickedName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  // Reset the draft when the committed path changes — adjusted during render
+  // (React's "storing information from previous renders" pattern), not in an effect.
+  const [syncedPath, setSyncedPath] = useState(path);
+  if (syncedPath !== path) {
+    setSyncedPath(path);
     setDraftPath(path);
     setPickedName(null);
-  }, [path]);
+  }
 
   useEffect(() => {
     let cancelled = false;
-    setError(null);
     browseProjects(api, path)
       .then((result) => {
         if (!cancelled) setBrowse(result);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setErrorState({ path, message: err instanceof Error ? err.message : String(err) });
       });
     return () => {
       cancelled = true;

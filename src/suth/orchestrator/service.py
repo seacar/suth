@@ -11,6 +11,7 @@ from suth.db import Memory
 from suth.objective import ObjectiveCheck
 from suth.personas.schema import Persona
 from suth.session import SessionResult, run_session
+from suth.taxonomy import FailureHit
 
 
 class ConcurrencyLimitError(Exception):
@@ -19,6 +20,11 @@ class ConcurrencyLimitError(Exception):
 
 class BudgetExceededError(Exception):
     """A caller/project's declared token budget for this period is used up."""
+
+
+class SessionNotFinishedError(Exception):
+    """The session is still running in another process, so this one can't
+    block on it — poll get_status until it reaches a terminal state."""
 
 
 @dataclass
@@ -298,8 +304,36 @@ class Orchestrator:
         re-raises whatever exception it failed with)."""
         handle = self._handles.get(session_id)
         if handle is None:
-            raise KeyError(f"unknown session_id: {session_id}")
+            return self._report_from_db(session_id)
         return handle.future.result()
+
+    def _report_from_db(self, session_id: str) -> SessionResult:
+        """Rebuild a report for a session this process didn't start (the CLI,
+        API and MCP server are separate processes sharing only Postgres)."""
+        memory = self.memory
+        row = memory.get_session(session_id) if memory else None
+        if memory is None or row is None:
+            raise KeyError(f"unknown session_id: {session_id}")
+        if row["status"] == "running":
+            raise SessionNotFinishedError(
+                f"session {session_id} is still running in another process; poll its status"
+            )
+        steps = memory.get_steps(session_id)
+        frustration = 0
+        for s in steps:  # same fold as AbandonmentEvaluator.observe
+            frustration = max(0, frustration + s["frustration_delta"])
+        return SessionResult(
+            session_id=session_id,
+            persona_id=row["persona_id"],
+            verdict=row["verdict"] or "error",
+            step_count=len(steps),
+            final_frustration=frustration,
+            friction_score=row["friction_score"] or 0.0,
+            failures=[
+                FailureHit(f["taxonomy_label"], f["step_index"], f["detail"] or "")
+                for f in memory.get_failures(session_id)
+            ],
+        )
 
     def add_completion_callback(self, session_id: str, callback: Callable[[Future], None]) -> None:
         """Register `callback(future)` to run when `session_id` finishes —

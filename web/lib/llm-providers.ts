@@ -10,6 +10,8 @@ export interface LlmProviderDefinition {
   defaultBaseUrl: string | null;
   credentialEnv: string | null;
   defaultModel: string;
+  /** Whether the backend has an adapter for it (src/suth/brain/providers/). */
+  supported: boolean;
 }
 
 export const LLM_PROVIDER_OPTIONS: LlmProviderDefinition[] = [
@@ -20,6 +22,7 @@ export const LLM_PROVIDER_OPTIONS: LlmProviderDefinition[] = [
     defaultBaseUrl: "http://localhost:11434",
     credentialEnv: null,
     defaultModel: DEFAULT_LLM_MODEL,
+    supported: true,
   },
   {
     id: "anthropic",
@@ -27,23 +30,26 @@ export const LLM_PROVIDER_OPTIONS: LlmProviderDefinition[] = [
     remote: true,
     defaultBaseUrl: null,
     credentialEnv: "ANTHROPIC_API_KEY",
-    defaultModel: "claude-sonnet-4-20250514",
+    defaultModel: "claude-opus-5-5",
+    supported: true,
   },
   {
     id: "openai",
-    label: "OpenAI",
+    label: "OpenAI (not yet supported)",
     remote: true,
     defaultBaseUrl: null,
     credentialEnv: "OPENAI_API_KEY",
     defaultModel: "gpt-4o",
+    supported: false,
   },
   {
     id: "custom",
-    label: "Custom remote API",
+    label: "Custom remote API (not yet supported)",
     remote: true,
     defaultBaseUrl: null,
     credentialEnv: null,
     defaultModel: "",
+    supported: false,
   },
 ];
 

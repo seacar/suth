@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from suth.brain.interface import ProviderProfile
 
@@ -24,9 +24,9 @@ class EnvironmentOverlay(BaseModel):
     headed: bool | None = None
     headless: bool | None = None
     model: str | None = None
-    max_steps: int | None = None
-    timeout_seconds: int | None = None
-    token_cap: int | None = None
+    max_steps: int | None = Field(default=None, ge=1)
+    timeout_seconds: int | None = Field(default=None, ge=1)
+    token_cap: int | None = Field(default=None, ge=1)
     record_video: bool | None = None
 
 
@@ -39,6 +39,9 @@ class ResolvedRunConfig(BaseModel):
     timeout_seconds: int
     auth: AuthConfig | None = None
     record_video: bool = True
+    # Per-session LLM token ceiling; None means uncapped. Distinct from the
+    # per-project budget in the DB, which spans many sessions.
+    token_cap: int | None = None
 
 
 class SuthConfig(BaseModel):
@@ -75,10 +78,15 @@ class SuthConfig(BaseModel):
             base_url=overlay.base_url or self.base_url,
             headed=headed,
             provider_profile=profile,
-            max_steps=overlay.max_steps or DEFAULT_MAX_STEPS,
-            timeout_seconds=overlay.timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
+            max_steps=overlay.max_steps if overlay.max_steps is not None else DEFAULT_MAX_STEPS,
+            timeout_seconds=(
+                overlay.timeout_seconds
+                if overlay.timeout_seconds is not None
+                else DEFAULT_TIMEOUT_SECONDS
+            ),
             auth=self.auth,
             record_video=overlay.record_video if overlay.record_video is not None else True,
+            token_cap=overlay.token_cap,
         )
 
 

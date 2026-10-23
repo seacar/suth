@@ -1,8 +1,6 @@
 import asyncio
 
-import pytest
-
-from suth.api.events import DONE, SessionEventBus
+from suth.api.events import SessionEventBus
 
 
 def test_per_session_publish_and_subscribe():
@@ -31,7 +29,7 @@ def test_late_global_subscriber_does_not_see_backlog():
         gen = bus.subscribe_global()
         try:
             return await asyncio.wait_for(gen.__anext__(), timeout=0.7)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         finally:
             await gen.aclose()

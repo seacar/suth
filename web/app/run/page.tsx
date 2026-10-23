@@ -4,12 +4,13 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useApi } from "@/lib/api-context";
 import { useProject } from "@/lib/project-context";
-import { subscribeJsonWs } from "@/lib/json-ws";
+import { fetchProject } from "@/lib/projects-api";
+import { watchSession } from "@/lib/run-watch";
 import { formatVerdict } from "@/lib/format";
 import { StepRow } from "@/components/StepRow";
 import { SessionReplay } from "@/components/SessionReplay";
 import { PageHeader } from "@/components/PageHeader";
-import type { BatchMember, PersonaRecord, RunPhase, RunReport, RunStarted, StepEvent } from "@/lib/types";
+import type { BatchMember, BatchStarted, PersonaRecord, RunPhase, RunReport, RunStarted, StepEvent } from "@/lib/types";
 
 const VERDICT_OK = "objective_met";
 
@@ -21,6 +22,7 @@ export default function RunPage() {
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<Set<string>>(new Set());
   const [objective, setObjective] = useState("");
   const [environment, setEnvironment] = useState("dev");
+  const [projectEnvs, setProjectEnvs] = useState<{ projectId: string; names: string[] } | null>(null);
   const [headed, setHeaded] = useState(true);
   const [stepThrough, setStepThrough] = useState(false);
 
@@ -31,8 +33,11 @@ export default function RunPage() {
   const [stepThroughWaiting, setStepThroughWaiting] = useState(false);
 
   const [isBatchMode, setIsBatchMode] = useState(false);
+  const [batchStarting, setBatchStarting] = useState(false);
   const [batchMembers, setBatchMembers] = useState<BatchMember[]>([]);
-  const [detailMember, setDetailMember] = useState<BatchMember | null>(null);
+  // Store the id, not a copy: the modal must keep showing live steps.
+  const [detailMemberId, setDetailMemberId] = useState<string | null>(null);
+  const detailMember = batchMembers.find((m) => m.sessionId === detailMemberId) ?? null;
   const [replaySessionId, setReplaySessionId] = useState<string | null>(null);
 
   const [lastError, setLastError] = useState<string | null>(null);
@@ -46,6 +51,34 @@ export default function RunPage() {
       .then(setPersonas)
       .catch(() => {});
   }, [api]);
+
+  // Only offer environments the selected project actually defines — any
+  // other choice is a guaranteed 400 from the API.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    fetchProject(api, projectId)
+      .then((detail) => {
+        if (!cancelled) setProjectEnvs({ projectId, names: Object.keys(detail.config.environments ?? {}) });
+      })
+      .catch(() => {
+        if (!cancelled) setProjectEnvs({ projectId, names: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, projectId]);
+  const environments = projectId && projectEnvs?.projectId === projectId ? projectEnvs.names : [];
+  const selectedEnvironment = environments.includes(environment)
+    ? environment
+    : environments.includes("dev")
+      ? "dev"
+      : (environments[0] ?? "");
+
+  // A batch is busy until every member has a verdict — derived from member
+  // state, not toggled from inside a setState updater.
+  const batchBusy = isBatchMode && (batchStarting || batchMembers.some((m) => m.phase.kind !== "finished"));
+  const busy = running || batchBusy;
 
   const isBatch = selectedPersonaIds.size > 1;
 
@@ -73,7 +106,7 @@ export default function RunPage() {
           project_id: projectId,
           persona_id: [...selectedPersonaIds][0] ?? "",
           objective,
-          environment,
+          environment: selectedEnvironment,
           headed,
           step_through: stepThrough,
           caller: "suth-web",
@@ -89,19 +122,16 @@ export default function RunPage() {
   }
 
   function watchSteps(sessionId: string, stepThroughMode: boolean) {
-    const unsubscribe = subscribeJsonWs<StepEvent>(
-      api.wsUrl(`/runs/${sessionId}/stream`),
+    const cancel = watchSession(
+      api,
+      sessionId,
       (event) => {
-        if (event.type === "step") {
-          setLiveSteps((prev) => [...prev, event]);
-          setStepThroughWaiting(stepThroughMode);
-        } else if (event.type === "done") {
-          finishRun(sessionId);
-        }
+        setLiveSteps((prev) => [...prev, event]);
+        setStepThroughWaiting(stepThroughMode);
       },
-      () => {}
+      () => finishRun(sessionId)
     );
-    activeSockets.current.push(unsubscribe);
+    activeSockets.current.push(cancel);
   }
 
   async function finishRun(sessionId: string) {
@@ -119,32 +149,31 @@ export default function RunPage() {
   function continueStep() {
     if (!currentSessionId) return;
     setStepThroughWaiting(false);
-    api.request(`/runs/${currentSessionId}/continue`, { method: "POST" }).catch(() => {});
+    api
+      .request(`/runs/${currentSessionId}/continue`, { method: "POST" })
+      .catch((err) => setLastError(err instanceof Error ? err.message : String(err)));
   }
 
   async function startBatch() {
     setIsBatchMode(true);
     setBatchMembers([]);
-    setRunning(true);
-    setPhase({ kind: "running" });
+    setBatchStarting(true);
+    setPhase({ kind: "idle" });
     setLastError(null);
 
     try {
-      const started = await api.request<{ batch_id: string; sessions: { session_id: string; persona_id: string }[] }>(
-        "/batches",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            project_id: projectId,
-            persona_ids: [...selectedPersonaIds],
-            objective,
-            environment,
-            headed,
-            caller: "suth-web",
-          }),
-        }
-      );
+      const started = await api.request<BatchStarted>("/batches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: projectId,
+          persona_ids: [...selectedPersonaIds],
+          objective,
+          environment: selectedEnvironment,
+          headed,
+          caller: "suth-web",
+        }),
+      });
 
       const members: BatchMember[] = started.sessions.map((s) => ({
         sessionId: s.session_id,
@@ -157,8 +186,8 @@ export default function RunPage() {
       members.forEach((member) => watchBatchMember(member.sessionId));
     } catch (err) {
       setLastError(err instanceof Error ? err.message : String(err));
-      setRunning(false);
-      setPhase({ kind: "idle" });
+    } finally {
+      setBatchStarting(false);
     }
   }
 
@@ -167,36 +196,22 @@ export default function RunPage() {
   }
 
   function watchBatchMember(sessionId: string) {
-    const unsubscribe = subscribeJsonWs<StepEvent>(
-      api.wsUrl(`/runs/${sessionId}/stream`),
-      (event) => {
-        if (event.type === "step") {
-          updateMember(sessionId, (m) => ({ ...m, steps: [...m.steps, event] }));
-        } else if (event.type === "done") {
-          api
-            .request<RunReport>(`/runs/${sessionId}/report`)
-            .then((report) => updateMember(sessionId, (m) => ({ ...m, phase: { kind: "finished", verdict: report.verdict } })))
-            .catch(() => updateMember(sessionId, (m) => ({ ...m, phase: { kind: "finished", verdict: "error" } })))
-            .finally(() => maybeFinishBatch(sessionId));
-        }
-      },
-      () => {}
-    );
-    activeSockets.current.push(unsubscribe);
-  }
-
-  function maybeFinishBatch(justFinishedId: string) {
-    setBatchMembers((prev) => {
-      const allDone = prev.every((m) => (m.sessionId === justFinishedId ? true : m.phase.kind === "finished"));
-      if (allDone) {
-        setRunning(false);
-        setPhase({ kind: "idle" });
+    const cancel = watchSession(
+      api,
+      sessionId,
+      (event) => updateMember(sessionId, (m) => ({ ...m, steps: [...m.steps, event] })),
+      () => {
+        api
+          .request<RunReport>(`/runs/${sessionId}/report`)
+          .then((report) => updateMember(sessionId, (m) => ({ ...m, phase: { kind: "finished", verdict: report.verdict } })))
+          .catch(() => updateMember(sessionId, (m) => ({ ...m, phase: { kind: "finished", verdict: "error" } })));
       }
-      return prev;
-    });
+    );
+    activeSockets.current.push(cancel);
   }
 
-  const canRun = projectId !== "" && selectedPersonaIds.size > 0 && objective !== "" && !running;
+  const canRun =
+    projectId !== "" && selectedPersonaIds.size > 0 && objective !== "" && selectedEnvironment !== "" && !busy;
 
   return (
     <>
@@ -218,7 +233,7 @@ export default function RunPage() {
               </button>
             )}
             <button type="button" className="primary" disabled={!canRun} onClick={isBatch ? startBatch : startRun}>
-              {isBatch ? `Run batch (${selectedPersonaIds.size})` : running ? "Running…" : "Run"}
+              {busy ? "Running…" : isBatch ? `Run batch (${selectedPersonaIds.size})` : "Run"}
             </button>
           </>
         }
@@ -269,10 +284,21 @@ export default function RunPage() {
             <div className="row stretch">
               <div className="field">
                 <label htmlFor="run-env">Environment</label>
-                <select id="run-env" value={environment} onChange={(e) => setEnvironment(e.target.value)}>
-                  <option value="dev">dev</option>
-                  <option value="ci">ci</option>
-                  <option value="agent">agent</option>
+                <select
+                  id="run-env"
+                  value={selectedEnvironment}
+                  disabled={environments.length === 0}
+                  onChange={(e) => setEnvironment(e.target.value)}
+                >
+                  {environments.length === 0 ? (
+                    <option value="">{projectId ? "No environments defined" : "Select a project"}</option>
+                  ) : (
+                    environments.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
             </div>
@@ -309,7 +335,7 @@ export default function RunPage() {
               ) : (
                 <div className="grid">
                   {batchMembers.map((member) => (
-                    <BatchMemberCard key={member.sessionId} member={member} onClick={() => setDetailMember(member)} />
+                    <BatchMemberCard key={member.sessionId} member={member} onClick={() => setDetailMemberId(member.sessionId)} />
                   ))}
                 </div>
               )}
@@ -340,7 +366,7 @@ export default function RunPage() {
       </div>
 
       {detailMember && (
-        <div className="modal-backdrop" onClick={() => setDetailMember(null)}>
+        <div className="modal-backdrop" onClick={() => setDetailMemberId(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{detailMember.personaId}</h3>
@@ -350,13 +376,13 @@ export default function RunPage() {
                     type="button"
                     onClick={() => {
                       setReplaySessionId(detailMember.sessionId);
-                      setDetailMember(null);
+                      setDetailMemberId(null);
                     }}
                   >
                     Watch replay
                   </button>
                 )}
-                <button type="button" className="ghost" onClick={() => setDetailMember(null)}>
+                <button type="button" className="ghost" onClick={() => setDetailMemberId(null)}>
                   Close
                 </button>
               </div>

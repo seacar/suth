@@ -17,9 +17,24 @@ interface ProjectModalProps {
 }
 
 export function ProjectModal({ open, mode, projectId, onClose, onSaved }: ProjectModalProps) {
+  if (!open) return null;
+  // Mounted only while open (and re-keyed per project), so every opening
+  // starts from fresh initial state instead of resetting it in an effect.
+  return (
+    <ProjectModalBody
+      key={`${mode}:${projectId ?? ""}`}
+      mode={mode}
+      projectId={projectId}
+      onClose={onClose}
+      onSaved={onSaved}
+    />
+  );
+}
+
+function ProjectModalBody({ mode, projectId, onClose, onSaved }: Omit<ProjectModalProps, "open">) {
   const api = useApi();
   const [configDir, setConfigDir] = useState(".");
-  const [configPath, setConfigPath] = useState("");
+  const [configPath, setConfigPath] = useState(mode === "edit" ? "" : "./suth_config.json");
   const [configExists, setConfigExists] = useState(false);
   const [registryId, setRegistryId] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -28,46 +43,35 @@ export function ProjectModal({ open, mode, projectId, onClose, onSaved }: Projec
   const [configuredCredentials, setConfiguredCredentials] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(mode === "edit" && Boolean(projectId));
 
   useEffect(() => {
-    if (!open) return;
-
-    setError(null);
-    setSaving(false);
-    setApiKey("");
-    setConfiguredCredentials({});
-
-    if (mode === "edit" && projectId) {
-      setLoading(true);
-      fetchProject(api, projectId)
-        .then((detail) => {
-          setRegistryId(detail.id);
-          setDisplayName(detail.name);
-          setConfigDir(detail.config_dir ?? ".");
-          setConfigPath(detail.config_path ?? "");
-          setConfigExists(true);
-          setConfig(detail.config);
-          setConfiguredCredentials(detail.provider_credentials_configured ?? {});
-        })
-        .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-        .finally(() => setLoading(false));
-      return;
-    }
-
-    setConfigDir(".");
-    setConfigPath("./suth_config.json");
-    setConfigExists(false);
-    setRegistryId("");
-    setDisplayName("");
-    setConfig(newProjectConfig("my-app"));
-    setApiKey("");
-    setConfiguredCredentials({});
-    setLoading(false);
-  }, [api, mode, open, projectId]);
+    if (mode !== "edit" || !projectId) return;
+    let cancelled = false;
+    fetchProject(api, projectId)
+      .then((detail) => {
+        if (cancelled) return;
+        setRegistryId(detail.id);
+        setDisplayName(detail.name);
+        setConfigDir(detail.config_dir ?? ".");
+        setConfigPath(detail.config_path ?? "");
+        setConfigExists(true);
+        setConfig(detail.config);
+        setConfiguredCredentials(detail.provider_credentials_configured ?? {});
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, mode, projectId]);
 
   useEffect(() => {
-    if (!open || mode === "edit") return;
+    if (mode === "edit") return;
 
     let cancelled = false;
     fetchConfigAt(api, configDir)
@@ -95,9 +99,7 @@ export function ProjectModal({ open, mode, projectId, onClose, onSaved }: Projec
     return () => {
       cancelled = true;
     };
-  }, [api, configDir, mode, open]);
-
-  if (!open) return null;
+  }, [api, configDir, mode]);
 
   const credentialRef = providerCredentialRef(config);
   const credentialConfigured = Boolean(credentialRef && configuredCredentials[credentialRef]);

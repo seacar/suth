@@ -15,6 +15,11 @@ if [ ! -x .venv/bin/python ]; then
   exit 1
 fi
 
+if [ ! -f mcp_projects.json ]; then
+  echo "==> creating mcp_projects.json from mcp_projects.example.json"
+  cp mcp_projects.example.json mcp_projects.json
+fi
+
 echo "==> applying migrations"
 specific exec cli -- .venv/bin/python scripts/migrate.py
 

@@ -166,3 +166,23 @@ def test_run_audit_matrix_rejects_unknown_persona_before_starting_anything():
             objective="x",
             environment="ci",
         )
+
+
+@requires_db
+def test_http_token_matching_and_parsing(monkeypatch):
+    from suth.mcp_server.http_app import _load_tokens, _match_caller
+
+    tokens = {"tok_a": "ci-runner", "tok_b": "agent"}
+    assert _match_caller(tokens, "tok_b") == "agent"
+    assert _match_caller(tokens, "tok_") is None
+
+    monkeypatch.setenv("MCP_CALLER_TOKENS", "not json")
+    with pytest.raises(RuntimeError, match="JSON object"):
+        _load_tokens()
+
+
+@requires_db
+def test_persona_resource_returns_definition():
+    from suth.mcp_server.server import persona_resource
+
+    assert persona_resource("power-user-v1")["id"] == "power-user-v1"

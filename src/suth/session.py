@@ -2,6 +2,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from suth.abandonment import AbandonmentEvaluator
 from suth.brain.history import HistoryWindow, StepRecord
@@ -24,6 +25,11 @@ class SessionResult:
     final_frustration: int
     friction_score: float
     failures: list[FailureHit] = field(default_factory=list)
+
+
+def _tokens_used(brain: Brain) -> int:
+    usage: Callable[[], int] | None = getattr(brain, "token_usage", None)
+    return usage() if usage is not None else 0
 
 
 def run_session(
@@ -60,7 +66,7 @@ def run_session(
             persona_version=persona.version,
             objective=objective,
             environment=environment,
-            model_used=brain.__class__.__name__,
+            model_used=getattr(brain, "model", None) or brain.__class__.__name__,
             caller=caller,
             batch_id=batch_id,
         )
@@ -76,6 +82,10 @@ def run_session(
             storage_state_path=config.auth.path if config.auth else None,
             interaction_mode=persona.interaction_mode,
             record_video=config.record_video,
+            # Per-session dirs: concurrent sessions (batches) would otherwise
+            # all write step-0001.png into one folder and clobber each other.
+            screenshot_dir=Path("screenshots") / session_id,
+            video_dir=Path("videos") / session_id,
         ) as driver:
             while step_index < config.max_steps:
                 if time.monotonic() >= deadline:
@@ -83,6 +93,10 @@ def run_session(
                     # of max_steps (classify_session treats "timeout" as "we
                     # stopped because we ran out of allotted budget", not an
                     # evaluator-detected failure pattern).
+                    stop_reason = "timeout"
+                    break
+                if config.token_cap is not None and _tokens_used(brain) >= config.token_cap:
+                    # Per-session token ceiling — another "ran out of budget" stop.
                     stop_reason = "timeout"
                     break
                 step_index += 1
@@ -158,8 +172,9 @@ def run_session(
             history.records, stop_reason, objective_check_configured=bool(objective_check)
         )
         score = compute_friction_score(evaluator.frustration_score, verdict, hits)
-    except Exception:
-        # Whatever else went wrong (a hung driver call past its own timeout,
+    except BaseException:
+        # BaseException, not Exception: a Ctrl-C (KeyboardInterrupt) mid-run
+        # must still close the row. Whatever else went wrong (a hung driver call past its own timeout,
         # an LLM provider error, a DB write failure), the session must still
         # reach a terminal state — otherwise it's stuck at status="running"
         # forever with no ended_at, which is exactly the "hangs forever" the

@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from suth.brain.schema import Action
 from suth.driver.browser import Driver

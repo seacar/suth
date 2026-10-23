@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     Engine,
@@ -173,7 +173,7 @@ class Memory:
                     status=status,
                     verdict=verdict,
                     friction_score=friction_score,
-                    ended_at=datetime.now(timezone.utc),
+                    ended_at=datetime.now(UTC),
                 )
             )
 

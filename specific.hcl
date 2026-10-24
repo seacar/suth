@@ -60,6 +60,9 @@ service "api" {
 
   endpoint {
     public = true
+    dev {
+      port = 3001
+    }
     health_check {
       path = "/healthz"
     }
